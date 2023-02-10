@@ -1,21 +1,28 @@
+import sys
+import uuid
+import pyderasn
+import asn1
+import getpass
+
+from base64 import standard_b64encode
+from textwrap import fill
+
 from pygost.asn1schemas.pfx import PFX, SafeContents, OctetStringSafeContents
 from pygost.asn1schemas.prvkey import PrivateKeyAlgorithmIdentifier, PrivateKeyInfo
 from pygost.asn1schemas.x509 import GostR34102012PublicKeyParameters
 from pygost.gost341194 import GOST341194
 from pygost.gost28147 import cfb_decrypt, ecb_decrypt, DEFAULT_SBOX
-import sys, pyderasn, asn1, getpass, uuid
 from pyderasn import ObjectIdentifier, OctetString, Integer
-from schemas import *
 from pygost.kdf import kdf_gostr3411_2012_256
-from base64 import standard_b64encode
-from textwrap import fill
+from schemas import *
+
 
 print("CryptoPro PFX Decoder by li0ard")
-passw = getpass.getpass("Введите пароль: ")
+passw = getpass.getpass("Enter password: ")
 
 
 def printProgressBar (iteration, total, prefix = '', suffix = '', decimals = 1, length = 100, fill = '█', printEnd = "\r"):
-    percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+	percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
     filledLength = int(length * iteration // total)
     bar = fill * filledLength + '-' * (length - filledLength)
     print(f'\r{prefix} |{bar}| {percent}% {suffix}', end = printEnd)
@@ -71,55 +78,64 @@ def unwrap_gost(kek, data, sbox=DEFAULT_SBOX):
     return cek
 
 
-pfx, tail = PFX().decode(open(sys.argv[1], "rb").read())
-_, outer_safe_contents = pfx["authSafe"]["content"].defined
-safe_contents, tail = OctetStringSafeContents().decode(bytes(outer_safe_contents[0]["bagValue"]))
-shrouded_key_bag, tail = CPKeyBag().decode(bytes(safe_contents[0]["bagValue"]))
+if __name__ == '__main__':
+	pfx, tail = PFX().decode(open(sys.argv[1], "rb").read())
+	_, outer_safe_contents = pfx["authSafe"]["content"].defined
+	safe_contents, tail = OctetStringSafeContents().decode(bytes(outer_safe_contents[0]["bagValue"]))
+	shrouded_key_bag, tail = CPKeyBag().decode(bytes(safe_contents[0]["bagValue"]))
 
-salt = bytes(shrouded_key_bag["bagParams"]["params"]["salt"])
-iters = int(shrouded_key_bag["bagParams"]["params"]["iters"].tohex(), 16)
-keybag = bytes(shrouded_key_bag["bagValue"])
+	salt = bytes(shrouded_key_bag["bagParams"]["params"]["salt"])
+	iters = int(shrouded_key_bag["bagParams"]["params"]["iters"].tohex(), 16)
+	keybag = bytes(shrouded_key_bag["bagValue"])
 
-print(" SALT  = " + salt.hex())
-print(" ITERS = " + str(iters))
+	print(" SALT  = " + salt.hex())
+	print(" ITERS = " + str(iters))
 
-KEY = passw.encode("utf-16le")
-count = 1
-printProgressBar(0, iters + 1, prefix = 'Прогресс:', suffix = 'Завершено', length = 50, fill="*")
-while count < iters + 1:
-	KEY = GOST341194(bytes.fromhex(KEY.hex() + salt.hex() +  str(hex(count))[2:].zfill(4))).digest()
-	printProgressBar(count + 1, iters + 1, prefix = 'Прогресс:', suffix = 'Завершено', length = 50, fill="*")
-	count = count + 1
-print(" KEY   = " + KEY.hex())
-print(" IV    = " + salt.hex()[:16])
-result = cfb_decrypt(KEY, keybag, iv=bytes.fromhex(salt.hex()[:16]))
-result = CPBlob().decode(result)[0]
-result = bytes(result["value"]).hex()
-algtype = result[:32][8:12]
-if algtype == "42aa":
-	algooid = "1.2.643.7.1.1.1.2"
-else:
-	algooid = "1.2.643.7.1.1.1.1"
-result = CPExportBlob().decode(bytes.fromhex(result[32:]))[0]
-ukm = bytes(result["value"]["ukm"]).hex()
-cek_enc = bytes(result["value"]["cek"]["enc"]).hex()
-cek_mac = bytes(result["value"]["cek"]["mac"]).hex()
-oids = getOids(bytes(result["value"]["oids"]))
+	KEY = passw.encode("utf-16le")
+	count = 1
+	printProgressBar(0, iters + 1, prefix = 'Прогресс:', suffix = 'Завершено', length = 50, fill="*")
+	
+	while count < iters + 1:
+		KEY = GOST341194(bytes.fromhex(KEY.hex() + salt.hex() +  str(hex(count))[2:].zfill(4))).digest()
+		printProgressBar(count + 1, iters + 1, prefix = 'Прогресс:', suffix = 'Завершено', length = 50, fill="*")
+		count = count + 1
+	
+	print(" KEY   = " + KEY.hex())
+	print(" IV    = " + salt.hex()[:16])
+	
+	result = cfb_decrypt(KEY, keybag, iv=bytes.fromhex(salt.hex()[:16]))
+	result = CPBlob().decode(result)[0]
+	result = bytes(result["value"]).hex()
+	algtype = result[:32][8:12]
+	
+	if algtype == "42aa":
+		algooid = "1.2.643.7.1.1.1.2"
+	else:
+		algooid = "1.2.643.7.1.1.1.1"
+	
+	result = CPExportBlob().decode(bytes.fromhex(result[32:]))[0]
+	ukm = bytes(result["value"]["ukm"]).hex()
+	cek_enc = bytes(result["value"]["cek"]["enc"]).hex()
+	cek_mac = bytes(result["value"]["cek"]["mac"]).hex()
+	oids = getOids(bytes(result["value"]["oids"]))
 
-KEKe = kdf_gostr3411_2012_256(KEY, bytes.fromhex("26bdb878"), bytes.fromhex(ukm))
-print(" KEKe  = " + KEKe.hex())
+	KEKe = kdf_gostr3411_2012_256(KEY, bytes.fromhex("26bdb878"), bytes.fromhex(ukm))
+	print(" KEKe  = " + KEKe.hex())
 
-if algtype == "46aa": #256
-	Ks = unwrap_gost(KEKe, bytes.fromhex(ukm + cek_enc + cek_mac))
-elif algtype == "42aa": #512
-	cek_enc2 = [cek_enc[i:i+64] for i in range(0,len(cek_enc),64)]
-	buff = []
-	for i in cek_enc2:
-		buff.append(unwrap_gost(KEKe, bytes.fromhex(ukm + i + cek_mac)).hex())
-	Ks = bytes.fromhex("".join(buff))
-print(" K     = " + Ks.hex())
-uid = str(uuid.uuid4())
-f = open("exported_" + uid + ".pem", "w")
-f.write(key2pem(Ks, oids, algooid))
-f.close()
-print("Сохранено в exported_" + uid + ".pem")
+	if algtype == "46aa": #256
+		Ks = unwrap_gost(KEKe, bytes.fromhex(ukm + cek_enc + cek_mac))
+	elif algtype == "42aa": #512
+		cek_enc2 = [cek_enc[i:i+64] for i in range(0,len(cek_enc),64)]
+		buff = []
+		for i in cek_enc2:
+			buff.append(unwrap_gost(KEKe, bytes.fromhex(ukm + i + cek_mac)).hex())
+		Ks = bytes.fromhex("".join(buff))
+	
+	print(" K     = " + Ks.hex())
+	
+	uid = str(uuid.uuid4())
+	f = open("exported_" + uid + ".pem", "w")
+	f.write(key2pem(Ks, oids, algooid))
+	f.close()
+	
+	print("Сохранено в exported_" + uid + ".pem")
