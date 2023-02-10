@@ -1,0 +1,3 @@
+asn1==2.6.0
+pyderasn==9.3
+pygost==5.11
